@@ -75,33 +75,64 @@ public <T> T getCache(String key, int expire, TypeReference<T> clazz, CacheLoada
 
 #### 2. 为什么用Redis
 
-​	(1) 速度快，因为数据存在内存中，类似于HashMap，HashMap的优势就是查找和操作的时间复杂度都是O(1)
+- 支持键值数据类型：字符串，散列，列表，集合，有序集合，并且可以对集合进行运算操作
+- Redis所有数据都存储在内存里，读写速度快于硬盘，并且支持将内存中的数据异步写入硬盘中
+- 可以用作缓存（设置失效时间），消息队列（list类型实现队列）等
+- 支持多数据库（分片）
+- 支持事务（multi，exec，watch，incr）
 
-​	(2)支持丰富数据类型，支持string，list，set，sorted set，hash
+#### 3. 什么时候用Redis
 
-​	(3) 支持事务，操作都是原子性，所谓的原子性就是对数据的更改要么全部执行，要么全部不执行
+- 缓存
 
-​	(4) 丰富的特性：可用于缓存，消息，按key设置过期时间，过期后将会自动删除
+- 单点登录
 
-[面试中关于Redis的问题看这篇就够了](https://blog.csdn.net/qq_34337272/article/details/80012284 )
+- 秒杀
 
-#### 3. 为什么Redis这么快
+  ```java
+  	/**
+       * 秒杀 气泡
+       */
+      public boolean secKillBubble(Integer bubbleId, Integer userId) {
+          Jedis jedis = getJedis();
+          // 第一层保障 从0自增key1
+          Long incr = jedis.incr(RedisConstant.bubbleEntryNum + bubbleId);
+          // 给key1设置过期时间
+          jedis.expire(RedisConstant.bubbleEntryNum+ bubbleId, RedisConstant.bubble_exp);
+          try {
+              // 监视key2
+              jedis.watch(RedisConstant.bubbleForOne + bubbleId);// watchkeys
+              // 如果key1没有被自增过则开启事务
+              if (incr <=1) {
+                  Transaction tx = jedis.multi();// 开启事务
+                  // 设置key2的值为用户id(抢到气泡的用户的id)
+                  tx.setex(RedisConstant.bubbleForOne + bubbleId,RedisConstant.bubble_exp, userId.toString());
+                  // 第二个人过来发现这个气泡已经被设置了用户id 说明已经被别人秒杀掉了 
+                  List<Object> list = tx.exec();// 提交事务，如果此时watchkeys被改动了，则返回null
+                  if (list != null) {
+                      log.info("气泡秒杀成功!" + ",userId" + userId + "，气泡Id：" + bubbleId);
+                      return true;
+                  }
+              }
+              log.info("气泡没有秒杀到" + ",userId" + userId + "，气泡Id：" + bubbleId);
+              return false;
+          } catch (Exception e) {
+              log.error("错误：秒杀气泡" + ",userId" + userId + "，气泡Id：" + bubbleId, e);
+              e.printStackTrace();
+          } finally {
+              jedis.close();
+          }
+          return false;
+      }
+  ```
 
-​	1、完全基于内存，绝大部分请求是纯粹的内存操作，非常快速。数据存在内存中，类似于HashMap，HashMap的优势就是查找和操作的时间复杂度都是O(1)；
+- 网站访问排名
 
-​	2、数据结构简单，对数据操作也简单，Redis中的数据结构是专门进行设计的；
+- 等
 
-​	3、采用单线程，避免了不必要的上下文切换和竞争条件，也不存在多进程或者多线程导致的切换而消耗 CPU，不用去考虑各种锁的问题，不存在加锁释放锁操作，没有因为可能出现死锁而导致的性能消耗；
+#### 4. 为什么Redis这么快
 
-​	4、使用多路I/O复用模型，非阻塞IO；
-
-​	5、使用底层模型不同，它们之间底层实现方式以及与客户端之间通信的应用协议不一样，Redis直接自己构建了VM 机制 ，因为一般的系统调用系统函数的话，会浪费一定的时间去移动和请求；
-
-以上几点都比较好理解，下边我们针对多路 I/O 复用模型进行简单的探讨：
-
-（1）多路 I/O 复用模型
-
-多路I/O复用模型是利用 select、poll、epoll 可以同时监察多个流的 I/O 事件的能力，在空闲的时候，会把当前线程阻塞掉，当有一个或多个流有 I/O 事件时，就从阻塞态中唤醒，于是程序就会轮询一遍所有的流（epoll 是只轮询那些真正发出了事件的流），并且只依次顺序的处理就绪的流，这种做法就避免了大量的无用操作。
-
-这里“多路”指的是多个网络连接，“复用”指的是复用同一个线程。采用多路 I/O 复用技术可以让单个线程高效的处理多个连接请求（尽量减少网络 IO 的时间消耗），且 Redis 在内存中操作数据的速度非常快，也就是说内存内的操作不会成为影响Redis性能的瓶颈，主要由以上几点造就了 Redis 具有很高的吞吐量。
+- Redis所有数据都存储在内存里，内存操作快于硬盘
+- 对管道的支持，由于内存操作很快，时间一般都耽误在网络传输上，Redis可以一块执行很多命令后再返回结果
+- 采用单线程，如果有多线程竞争锁的时间 ，好几个单线程都执行完毕了
 
